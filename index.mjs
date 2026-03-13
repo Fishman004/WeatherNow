@@ -1,14 +1,14 @@
 //James Fisher
 import express from 'express';
-import mysql from 'mysql2/promise';
 import bcrypt from 'bcrypt';
 import session from 'express-session';
 import dotenv from 'dotenv';
+import sql from './db.js'
 
 dotenv.config();
 
 const app = express();
-const weatherKey = process.env.WEATHER_KEY;
+const weatherKey = process.env.API_KEY;
 let weatherBaseUrl = 'https://api.tomorrow.io/v4/weather/forecast';
 
 app.set('view engine', 'ejs')
@@ -33,16 +33,6 @@ app.use(async (req, res, next) => {
     next();
 });
 
-const pool = mysql.createPool({
-    host: "israeljosefernandez.tech",
-    user: "israeljo_laptop",
-    password: "Cst-336",
-    database: "israeljo_database_2",
-    connectionLimit: 10,
-    waitForConnections: true
-});
-
-const conn = await pool.getConnection();
 
 function isAuthenticated(req, res, next) {
     if (req.session.authenticated === true) {
@@ -81,10 +71,8 @@ function assembleUrl(zip, units) {
 }
 
 async function getLocations() {
-    let sql = `SELECT * FROM saved_locations`;
-    const [rows] = await conn.query(sql);
-    console.log(rows);
-    return rows;
+    const rows = await sql`SELECT * FROM saved_locations`
+    return rows
 }
 
 async function getWeather(zip, units) {
@@ -98,11 +86,11 @@ app.get('/', async (req, res) => {
     let units = "imperial";
     if (req.session.authenticated) {
         let userId = req.session.userId;
-        let sql = `SELECT * FROM userPreferences WHERE user_id = ?`;
-        let sqlParams = [userId];
-        const [rows] = await conn.query(sql, sqlParams);
-        units = rows[0].user_temp;
-        weather = await getWeather(rows[0].zipcode, units);
+        console.log('userId:', userId)
+        const rows = await sql`SELECT * FROM userPreferences WHERE user_id = ${userId}`
+        console.log(rows)
+        units = rows[0].user_temp
+        weather = await getWeather(rows[0].zipcode, units)
     } else {
         weather = await getWeather(95060, "imperial")
     }
@@ -115,17 +103,13 @@ app.get('/', async (req, res) => {
      let units = "imperial";
      if (req.session.authenticated) {
          let userId = req.session.userId;
-         let sql = `SELECT * FROM userPreferences WHERE user_id = ?`;
-         let sqlParams = [userId];
-         const [rows] = await conn.query(sql, sqlParams);
+         const rows = await sql`SELECT * FROM userPreferences WHERE user_id = ${userId}`;
          units = rows[0].user_temp;
          weather = await getWeather(req.query.location, units);
      } else {
          weather = await getWeather(req.query.location, "imperial")
      }
-     let sql = `SELECT * FROM saved_locations WHERE zipcode = ?`;
-     let sqlParams = [req.query.location];
-     let [data] = await conn.query(sql, sqlParams);
+     const data = await sql`SELECT * FROM saved_locations WHERE zipcode = ${req.query.location}`
      let location = data[0].location_name;
      res.render('location.ejs', {weather, location, units});
  });
@@ -136,9 +120,7 @@ app.get('/', async (req, res) => {
      let zipcode  = req.query.zipcode;
      if (req.session.authenticated) {
          let userId = req.session.userId;
-         let sql = `SELECT * FROM userPreferences WHERE user_id = ?`;
-         let sqlParams = [userId];
-         const [rows] = await conn.query(sql, sqlParams);
+         const rows = await sql`SELECT * FROM userPreferences WHERE user_id = ${userId}`
          units = rows[0].user_temp;
          weather = await getWeather(zipcode, units);
      } else {
@@ -154,14 +136,12 @@ app.get('/logout',isAuthenticated, (req, res) => {
 })
 
 app.get("/dbTest", async(req, res) => {
-    let sql = "SELECT CURDATE()";
-    const [rows] = await conn.query(sql);
+    const rows = await sql`SELECT CURRENT_DATE`;
     res.send(rows);
 });//dbTest
 
 app.get('/admin', isAuthenticatedAdmin, async (req, res) => {
-    let sql = `SELECT * FROM user`;
-    const [users] = await conn.query(sql);
+    const users = await sql`SELECT * FROM "user"`;
     res.render('admin', {users});
 });
 
@@ -169,20 +149,14 @@ app.post('/admin/users/:id/edit', isAuthenticatedAdmin, async (req, res) => {
     const userId = req.params.id;
     const { username, email, is_admin } = req.body;
 
-    const sql = `UPDATE user SET username = ?, email = ?, is_admin = ? WHERE user_id = ?`;
-    const sqlParams = [username, email, is_admin, userId];
-
-    await pool.query(sql, sqlParams);
+    await sql`UPDATE "user" SET username = ${username}, email = ${email}, is_admin = ${is_admin} WHERE user_id = ${userId}`;
     res.redirect('/admin');
 });
 
 app.post('/admin/users/:id/delete', isAuthenticatedAdmin, async (req, res) => {
     const userId = req.params.user_id;
 
-    const sql = `DELETE FROM user WHERE id = ?`;
-    const sqlParams = [userId];
-
-    await pool.query(sql, sqlParams);
+    await sql`DELETE FROM "user" WHERE id = ${userId}`;
     res.redirect('/admin');
 });
 
@@ -208,48 +182,36 @@ app.get('/profile', isAuthenticated, async (req, res) => {
 });
 
 app.post('/profile', isAuthenticated, async (req, res) => {
-    const { email, tempUnit, savedLocation, backgroundImage } = req.body;
+    const { email, tempUnit, savedLocation} = req.body;
+    const backgroundImage = req.body.backgroundImage || 'default'
     const userId = req.session.userId;
-        await pool.query(
-            'UPDATE user SET email = ? WHERE user_id = ?',
-            [email, userId]
-        );
+    console.log({ email, tempUnit, savedLocation, backgroundImage, userId })
+    await sql`UPDATE "user" SET email = ${email} WHERE user_id = ${userId}`
 
-        const [existingPreference] = await pool.query(
-            'SELECT * FROM userPreferences WHERE user_id = ?',
-            [userId]
-        );
+    const existingPreference = await sql`SELECT * FROM userPreferences WHERE user_id = ${userId}`
 
-        if (existingPreference.length > 0) {
-            await pool.query(
-                'UPDATE userPreferences SET user_temp = ?, zipcode = ?, image = ? WHERE user_id = ?',
-                [tempUnit, savedLocation, backgroundImage, userId]
-            );
-        } else {
-            await pool.query(
-                'INSERT INTO userPreferences (user_id, user_temp, zipcode, image) VALUES (?, ?, ?, ?)',
-                [userId, tempUnit, savedLocation, backgroundImage]
-            );
-        }
-        req.session.email = email;
-        req.session.userTemp = tempUnit;
-        req.session.zipCode = savedLocation;
-        req.session.image = backgroundImage;
-        res.redirect('/profile');
+    if (existingPreference.length > 0) {
+        await sql`UPDATE userPreferences SET user_temp = ${tempUnit}, zipcode = ${savedLocation}, image = ${backgroundImage} WHERE user_id = ${userId}`
+    } else {
+        await sql`INSERT INTO userPreferences (user_id, user_temp, zipcode, image) VALUES (${userId}, ${tempUnit}, ${savedLocation}, ${backgroundImage})`
+    }
+
+    req.session.email = email
+    req.session.userTemp = tempUnit
+    req.session.zipCode = savedLocation
+    req.session.image = backgroundImage
+    res.redirect('/profile')
 
 });
 
 app.post('/login',isNotAuthenticated, async (req, res) => {
     let username = req.body.username;
     let password = req.body.password;
-    let sql = `
-        SELECT user.*, userPreferences.user_temp, userPreferences.image, userPreferences.zipcode
-        FROM user
-        LEFT JOIN userPreferences ON user.user_id = userPreferences.user_id
-        WHERE user.username = ?
-    `;
-    let sqlParams = [username];
-    const [rows] = await conn.query(sql, sqlParams);
+    const rows = await sql`
+    SELECT "user".*, userPreferences.user_temp, userPreferences.image, userPreferences.zipcode
+    FROM "user"
+    LEFT JOIN userPreferences ON "user".user_id = userPreferences.user_id
+    WHERE "user".username = ${username}`
     if (rows.length <= 0) {
         res.redirect('/');
         return;
@@ -276,36 +238,27 @@ app.get('/register', isNotAuthenticated, (req, res) => {
     res.render('register', {error});
 });
 app.post('/register', async (req, res) => {
-    // const { username, email, password, confirmPassword } = req.body;
-    let username = req.body.username;
-    let email = req.body.email;
-    let password = req.body.password;
-    let confirmPassword = req.body.confirmPassword;
+    let username = req.body.username
+    let email = req.body.email
+    let password = req.body.password
+    let confirmPassword = req.body.confirmPassword
+
     if (password !== confirmPassword) {
-        let error = "Passwords do not match";
-        res.render('register', {error});
+        let error = "Passwords do not match"
+        res.render('register', {error})
         return
     }
 
-    // Hash the password using bcrypt
-    const hashedPassword = await bcrypt.hash(password, 10);
+    const hashedPassword = await bcrypt.hash(password, 10)
 
-    // INSERT user into database here
-    // Example pseudo-code:
-    let sql = `INSERT INTO user (username, email, password) VALUES (?, ?, ?)`
-    let sqlParams = [username, email, hashedPassword]
-    // await conn.query(sql, sqlParams);
-    let [result] = await conn.query(sql, sqlParams);
-    let sql_userid = `SELECT user_id FROM user WHERE username = ?`
-    // await conn.query(sql_userid, [username]);
-    let [userid] = await conn.query(sql_userid, [username]);
-    // console.log(userid[0].user_id);
-    let sql2 = `INSERT INTO userPreferences (user_id, zipcode, user_temp, image) VALUES (?, ?, ?, ?)`
-    let sqlParams2 = [userid[0].user_id, 93955, 'imperial', 'default']
-    await conn.query(sql2, sqlParams2);
+    await sql`INSERT INTO "user" (username, email, password) VALUES (${username}, ${email}, ${hashedPassword})`
 
-    res.redirect('/login');
-});
+    const userid = await sql`SELECT user_id FROM "user" WHERE username = ${username}`
+
+    await sql`INSERT INTO userPreferences (user_id, zipcode, user_temp, image) VALUES (${userid[0].user_id}, ${93955}, ${'imperial'}, ${'default'})`
+
+    res.redirect('/login')
+})
 
 app.get('/login',isNotAuthenticated, async (req, res) => {
     res.render('login');
